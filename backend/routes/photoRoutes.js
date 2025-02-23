@@ -3,6 +3,7 @@ const multer = require('multer');
 const cloudinary = require('../config/cloudinary');
 const Photo = require('../models/Photo');
 const ExifParser = require('exif-parser');
+const duplicateQueue = require('../config/queue');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -16,7 +17,6 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
 
         let uploadedPhotos = [];
 
-        // Process each image
         for (const file of req.files) {
             let clickedAt = new Date();
             let location = { latitude: null, longitude: null };
@@ -26,12 +26,9 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
                 const parser = ExifParser.create(file.buffer);
                 const exifData = parser.parse();
 
-                // Get clickedAt (Date taken)
                 if (exifData.tags.DateTimeOriginal) {
                     clickedAt = new Date(exifData.tags.DateTimeOriginal * 1000);
                 }
-
-                // Get location (GPS coordinates)
                 if (exifData.tags.GPSLatitude && exifData.tags.GPSLongitude) {
                     location.latitude = exifData.tags.GPSLatitude;
                     location.longitude = exifData.tags.GPSLongitude;
@@ -60,6 +57,10 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
 
             await newPhoto.save();
             uploadedPhotos.push(newPhoto);
+
+            // ✅ Add job to queue and log it
+            const job = await duplicateQueue.add('checkDuplicate', { photoId: newPhoto._id, url: newPhoto.url });
+            console.log(`🟢 Job added to queue: ${job.id}`);
         }
 
         res.status(201).json(uploadedPhotos);
@@ -67,6 +68,7 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 // Fetches all photos and sort
 // Sort by clickedAt (newest first):

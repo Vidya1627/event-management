@@ -1,24 +1,28 @@
 const { Worker } = require('bullmq');
 const Redis = require('ioredis');
 
-const redisConnection = new Redis(); // Connect to Redis
+const redisOptions = {
+    host: "127.0.0.1",
+    port: 6379,
+    maxRetriesPerRequest: null, // ✅ Ensures BullMQ works properly
+    enableReadyCheck: false     // ✅ Prevents connection issues
+};
 
-// Worker to process duplicate detection tasks
-const duplicateWorker = new Worker(
-    'duplicateCheckQueue',
-    async (job) => {
-        console.log(`Processing job: ${job.id}, Photo URL: ${job.data.url}`);
+const worker = new Worker('duplicateCheckQueue', async (job) => {
+    console.log(`Processing job: ${job.id}`);
+    
+    // Simulate AI duplicate check
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        // Simulating duplicate detection (AI will be added later)
-        const isDuplicate = Math.random() < 0.5; // Temporary logic (50% chance)
+    console.log(`Job completed: ${job.id}`);
+}, {
+    connection: new Redis(redisOptions) // ✅ Ensure Worker has the correct Redis options
+});
 
-        if (isDuplicate) {
-            console.log(`Duplicate found for photo: ${job.data.url}`);
-        } else {
-            console.log(`No duplicates found for photo: ${job.data.url}`);
-        }
-    },
-    { connection: redisConnection }
-);
+worker.on('completed', job => {
+    console.log(`✅ Job ${job.id} completed`);
+});
 
-console.log('Duplicate detection worker started!');
+worker.on('failed', (job, err) => {
+    console.error(`❌ Job ${job.id} failed:`, err);
+});
