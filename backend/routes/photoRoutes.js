@@ -6,7 +6,9 @@ const ExifParser = require('exif-parser');
 const duplicateQueue = require('../config/queue');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+// Multer for file handling
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 // Bulk Upload Route
 router.post('/upload', upload.array('images', 100), async (req, res) => {
@@ -37,7 +39,7 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
                 console.warn("Could not extract EXIF data for", file.originalname);
             }
 
-            // Upload to Cloudinary
+            // Upload to Cloudinary (Original Image)
             const result = await new Promise((resolve, reject) => {
                 cloudinary.uploader.upload_stream({ resource_type: "image" }, (error, result) => {
                     if (error) reject(error);
@@ -45,9 +47,13 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
                 }).end(file.buffer);
             });
 
+            // Generate Thumbnail (200px width)
+            const thumbnailUrl = cloudinary.url(result.public_id, { width: 200, crop: "scale" });
+
             // Save metadata to DB
             const newPhoto = new Photo({
-                url: result.secure_url,
+                url: result.secure_url,       // Original Image URL
+                thumbnailUrl: thumbnailUrl,  // Thumbnail URL
                 filename: result.public_id,
                 size: file.size,
                 location,
@@ -58,7 +64,7 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
             await newPhoto.save();
             uploadedPhotos.push(newPhoto);
 
-            // ✅ Add job to queue and log it
+            // Add job to queue and log it
             const job = await duplicateQueue.add('checkDuplicate', { photoId: newPhoto._id, url: newPhoto.url });
             console.log(`🟢 Job added to queue: ${job.id}`);
         }
@@ -70,44 +76,24 @@ router.post('/upload', upload.array('images', 100), async (req, res) => {
 });
 
 
-// Fetches all photos and sort
-// Sort by clickedAt (newest first):
-// GET /api/photos?sortBy=clickedAt&order=desc
-// Sort by location (latitude ascending):
-// GET /api/photos?sortBy=location&order=asc
+// Fetch all photos in the order they were uploaded
 router.get('/photos', async (req, res) => {
     try {
-        let { page = 1, limit = 10, startDate, endDate, lat, lng, radius } = req.query;
+        // Default values: page = 1, limit = 10 (shows 10 photos per request)
+        let { page = 1, limit = 10 } = req.query;
 
         // Convert page & limit to numbers
         page = parseInt(page);
         limit = parseInt(limit);
 
-        let query = {};
-
-        // Filter by date range (clickedAt)
-        if (startDate || endDate) {
-            query.clickedAt = {};
-            if (startDate) query.clickedAt.$gte = new Date(startDate);
-            if (endDate) query.clickedAt.$lte = new Date(endDate);
-        }
-
-        // Filter by location (basic radius search)
-        if (lat && lng && radius) {
-            const maxDistance = parseFloat(radius) / 111; // Convert km to degrees
-            query.location = {
-                latitude: { $gte: parseFloat(lat) - maxDistance, $lte: parseFloat(lat) + maxDistance },
-                longitude: { $gte: parseFloat(lng) - maxDistance, $lte: parseFloat(lng) + maxDistance }
-            };
-        }
-
-        // Fetch paginated data **in the order they were uploaded**
-        const photos = await Photo.find(query)
+        // Fetch paginated photos **in the order they were uploaded**
+        const photos = await Photo.find()
             .skip((page - 1) * limit)
-            .limit(limit);
+            .limit(limit)
+            .select("url thumbnailUrl clickedAt location");
 
         // Total count for frontend pagination
-        const totalPhotos = await Photo.countDocuments(query);
+        const totalPhotos = await Photo.countDocuments();
 
         res.status(200).json({
             page,
@@ -121,6 +107,7 @@ router.get('/photos', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 
 // delete photo by id
